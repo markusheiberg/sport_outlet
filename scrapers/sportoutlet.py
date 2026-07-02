@@ -59,8 +59,35 @@ def _collect_links(page: Page) -> dict[str, str]:
     return {_norm(a["text"]): a["href"] for a in anchors if a["text"]}
 
 
+def _merge_matching_links(page: Page, wanted: dict[str, str], resolved: dict[str, str]) -> None:
+    links = _collect_links(page)
+    for key, name in wanted.items():
+        if name not in resolved and key in links:
+            resolved[name] = links[key]
+
+
+def _open_panel(page: Page, label: str) -> bool:
+    """Click a toggle like 'Kategori' or 'Meny'; True if it was clicked."""
+    try:
+        toggle = page.get_by_text(label, exact=True).first
+        if toggle.is_visible(timeout=1500):
+            toggle.click(timeout=2000)
+            page.wait_for_timeout(1000)
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def get_categories(page: Page) -> dict[str, str]:
-    """Resolve category name -> URL from the live DOM (no guessed slugs)."""
+    """Resolve category name -> URL from the live DOM (no guessed slugs).
+
+    Strategy 1: find anchors whose visible text is a category name, also
+    after opening the Kategori filter and the Meny drawer.
+    Strategy 2 (fallback, since the Kategori items may be JS-navigating
+    buttons rather than <a> tags): click each category name and capture
+    the URL the site itself navigates to.
+    """
     wanted = {_norm(name): name for name in CATEGORY_NAMES}
     resolved: dict[str, str] = {}
 
@@ -68,20 +95,31 @@ def get_categories(page: Page) -> dict[str, str]:
         page.goto(url, wait_until="domcontentloaded")
         dismiss_cookie_banner(page)
         page.wait_for_timeout(2000)
-        # The Kategori accordion may need opening before its links render.
-        try:
-            toggle = page.get_by_text("Kategori", exact=True).first
-            if toggle.is_visible(timeout=2000):
-                toggle.click(timeout=2000)
-                page.wait_for_timeout(1000)
-        except Exception:
-            pass
-        links = _collect_links(page)
-        for key, name in wanted.items():
-            if name not in resolved and key in links:
-                resolved[name] = links[key]
+        _merge_matching_links(page, wanted, resolved)
+        for label in ("Kategori", "Meny"):
+            if _open_panel(page, label):
+                _merge_matching_links(page, wanted, resolved)
         if len(resolved) == len(wanted):
-            break
+            return resolved
+
+    for key, name in wanted.items():
+        if name in resolved:
+            continue
+        try:
+            page.goto(START_URL, wait_until="domcontentloaded")
+            page.wait_for_timeout(1500)
+            item = page.get_by_text(name, exact=True).first
+            if not item.is_visible(timeout=1500):
+                _open_panel(page, "Kategori")
+                item = page.get_by_text(name, exact=True).first
+                if not item.is_visible(timeout=1500):
+                    continue
+            item.click(timeout=2000)
+            page.wait_for_timeout(2500)
+            if page.url.rstrip("/") != START_URL.rstrip("/"):
+                resolved[name] = page.url
+        except Exception:
+            continue
 
     if not resolved:
         raise ScrapeError(
