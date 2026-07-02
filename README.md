@@ -17,10 +17,16 @@ playwright install chromium
 python main.py
 ```
 
-Prints a summary table and appends one row per site to
-`data/sku_counts.csv` (columns: `timestamp_utc, site, sku_count, status,
-note`). A site that fails to load is recorded with an empty `sku_count`
-and `status=error` rather than a guessed number.
+Prints a summary table and appends rows to `data/sku_counts.csv`
+(columns: `timestamp_utc, site, category, sku_count, status, note`).
+Each site gets one `category=all` row for its whole catalog; sites with
+category support (currently Sport Outlet) also get one row per top-level
+category. A failed read is recorded with an empty `sku_count` and
+`status=error` rather than a guessed number. Existing CSVs from before
+the `category` column are migrated in place on the next run.
+
+Note: per-category counts can sum to more than the `all` count, since a
+product may be listed in several categories.
 
 ## Adding / fixing a site scraper
 

@@ -13,7 +13,7 @@ from playwright.sync_api import Browser, Page, sync_playwright
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 RESULTS_CSV = DATA_DIR / "sku_counts.csv"
-CSV_FIELDS = ["timestamp_utc", "site", "sku_count", "status", "note"]
+CSV_FIELDS = ["timestamp_utc", "site", "category", "sku_count", "status", "note"]
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -27,6 +27,7 @@ class SiteResult:
     sku_count: Optional[int]
     status: str  # "ok" | "error"
     note: str = ""
+    category: str = "all"  # "all" = whole catalog; otherwise a category name
 
 
 class ScrapeError(RuntimeError):
@@ -193,9 +194,38 @@ def count_unique_elements_by_scroll(
     return len(seen)
 
 
+def _migrate_csv_if_needed() -> None:
+    """Rewrite an existing results CSV whose header predates the current
+    CSV_FIELDS (e.g. rows written before the `category` column existed);
+    missing columns are filled with defaults."""
+    with RESULTS_CSV.open(newline="", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        header = next(reader, None)
+    if header is None or header == CSV_FIELDS:
+        return
+    with RESULTS_CSV.open(newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    with RESULTS_CSV.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    "timestamp_utc": row.get("timestamp_utc", ""),
+                    "site": row.get("site", ""),
+                    "category": row.get("category", "all"),
+                    "sku_count": row.get("sku_count", ""),
+                    "status": row.get("status", ""),
+                    "note": row.get("note", ""),
+                }
+            )
+
+
 def write_result(result: SiteResult) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     is_new = not RESULTS_CSV.exists()
+    if not is_new:
+        _migrate_csv_if_needed()
     with RESULTS_CSV.open("a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
         if is_new:
@@ -204,6 +234,7 @@ def write_result(result: SiteResult) -> None:
             {
                 "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "site": result.site,
+                "category": result.category,
                 "sku_count": result.sku_count if result.sku_count is not None else "",
                 "status": result.status,
                 "note": result.note,

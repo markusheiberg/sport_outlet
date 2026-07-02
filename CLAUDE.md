@@ -24,8 +24,14 @@ Scrapers → local CSV.
   catalog until no new products are found. This avoids relying on an
   "X products found" label, since not all sites show one.
 - Each site has its own scraper module exporting `get_sku_count(page)`.
+  A module may also export `get_categories(page) -> {name: url}`; when it
+  does, `main.py` records one extra row per category alongside the
+  whole-catalog `all` row. Category URLs are resolved from the live DOM by
+  visible link text — never from guessed slugs.
 - Results are appended to `data/sku_counts.csv` — one timestamped row per
-  site per run.
+  site (and per category, where supported) per run. The `category` column
+  is `all` for whole-catalog counts. Per-category counts may sum to more
+  than `all` because one product can be listed in several categories.
 
 ## Rules for Claude
 - One site failing must never stop the others — `main.py` wraps each

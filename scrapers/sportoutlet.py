@@ -11,25 +11,89 @@ a CDN URL of the form:
 The <article-id> segment is stable per product and used as the dedupe key
 (product *name*/alt text is not unique - color/size variants share it).
 
-Per-category pages (e.g. https://sportoutlet.no/kl%C3%A6r) exist as an
-alternative if /campaign ever stops being the full catalog, but summing
-them isn't needed while /campaign covers "Alle".
+Category pages (e.g. https://sportoutlet.no/kl%C3%A6r) use the same tile
+markup and infinite scroll. Their URLs are resolved from the live DOM by
+matching visible link text against CATEGORY_NAMES rather than hardcoding
+slugs, so multi-word categories can't be mis-guessed. A product can appear
+in more than one category, so the per-category counts may sum to more than
+the "all" count.
 """
 from __future__ import annotations
 
+import unicodedata
+
 from playwright.sync_api import Page
 
-from ._common import count_unique_elements_by_scroll
+from ._common import ScrapeError, count_unique_elements_by_scroll, dismiss_cookie_banner
 
 START_URL = "https://sportoutlet.no/campaign"
+HOME_URL = "https://sportoutlet.no/"
 PRODUCT_IMAGE_SELECTOR = 'img[alt^="Image of product:"]'
 ARTICLE_ID_PATTERN = r"/articles/[^/]+/"
 
+# Top-level categories in the "Kategori" filter menu on /campaign.
+CATEGORY_NAMES = [
+    "Klær",
+    "Sko",
+    "Friluft og camping",
+    "Sportsutstyr",
+    "Trimutstyr",
+    "Fiskeutstyr",
+    "Mat og drikke",
+    "Vintersport",
+    "Lagsport",
+    "Sykkel",
+    "Kjæledyr",
+]
 
-def get_sku_count(page: Page) -> int:
+
+def _norm(text: str) -> str:
+    return unicodedata.normalize("NFC", text).strip().casefold()
+
+
+def _collect_links(page: Page) -> dict[str, str]:
+    """Map normalized visible link text -> absolute href for all anchors."""
+    anchors = page.eval_on_selector_all(
+        "a[href]", "els => els.map(e => ({text: e.innerText.trim(), href: e.href}))"
+    )
+    return {_norm(a["text"]): a["href"] for a in anchors if a["text"]}
+
+
+def get_categories(page: Page) -> dict[str, str]:
+    """Resolve category name -> URL from the live DOM (no guessed slugs)."""
+    wanted = {_norm(name): name for name in CATEGORY_NAMES}
+    resolved: dict[str, str] = {}
+
+    for url in (START_URL, HOME_URL):
+        page.goto(url, wait_until="domcontentloaded")
+        dismiss_cookie_banner(page)
+        page.wait_for_timeout(2000)
+        # The Kategori accordion may need opening before its links render.
+        try:
+            toggle = page.get_by_text("Kategori", exact=True).first
+            if toggle.is_visible(timeout=2000):
+                toggle.click(timeout=2000)
+                page.wait_for_timeout(1000)
+        except Exception:
+            pass
+        links = _collect_links(page)
+        for key, name in wanted.items():
+            if name not in resolved and key in links:
+                resolved[name] = links[key]
+        if len(resolved) == len(wanted):
+            break
+
+    if not resolved:
+        raise ScrapeError(
+            f"could not resolve any category links on {START_URL} or {HOME_URL}"
+        )
+    return resolved
+
+
+def get_sku_count(page: Page, start_url: str = START_URL) -> int:
     return count_unique_elements_by_scroll(
         page,
-        start_url=START_URL,
+        start_url=start_url,
         selector=PRODUCT_IMAGE_SELECTOR,
         attribute="src",
         key_pattern=ARTICLE_ID_PATTERN,
