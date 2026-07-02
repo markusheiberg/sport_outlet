@@ -21,6 +21,7 @@ the "all" count.
 from __future__ import annotations
 
 import unicodedata
+import urllib.parse
 
 from playwright.sync_api import Page
 
@@ -118,14 +119,50 @@ def get_categories(page: Page) -> dict[str, str]:
             page.wait_for_timeout(2500)
             if page.url.rstrip("/") != START_URL.rstrip("/"):
                 resolved[name] = page.url
+            else:
+                # The click may only have expanded a submenu; links to the
+                # category page might have appeared inside it.
+                _merge_matching_links(page, {key: name}, resolved)
         except Exception:
             continue
+
+    for key, name in wanted.items():
+        if name in resolved:
+            continue
+        url = _verified_slug_url(page, name)
+        if url:
+            resolved[name] = url
 
     if not resolved:
         raise ScrapeError(
             f"could not resolve any category links on {START_URL} or {HOME_URL}"
         )
     return resolved
+
+
+def _verified_slug_url(page: Page, name: str) -> str | None:
+    """Derive https://sportoutlet.no/<slug> from the category name (the
+    user-confirmed pattern: 'Klær' -> /kl%C3%A6r) and accept it ONLY if the
+    live page proves it's that category: it must load without an HTTP
+    error, render product tiles, and carry the category name in its
+    <title> or <h1>. Anything else returns None and the category is
+    reported as an error row instead of a guessed count.
+    """
+    slug = _norm(name).replace(" ", "-")
+    url = HOME_URL + urllib.parse.quote(slug)
+    try:
+        response = page.goto(url, wait_until="domcontentloaded")
+        if response is not None and response.status >= 400:
+            return None
+        page.wait_for_selector(PRODUCT_IMAGE_SELECTOR, timeout=10_000)
+        labels = [page.title()]
+        for h1 in page.eval_on_selector_all("h1", "els => els.map(e => e.innerText)"):
+            labels.append(h1)
+        if any(_norm(name) in _norm(label) for label in labels if label):
+            return page.url
+    except Exception:
+        pass
+    return None
 
 
 def get_sku_count(page: Page, start_url: str = START_URL) -> int:
