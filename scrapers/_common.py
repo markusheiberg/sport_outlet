@@ -131,6 +131,7 @@ def count_unique_elements_by_scroll(
     selector: str,
     attribute: str = "src",
     key_pattern: Optional[str] = None,
+    fallback_attribute: Optional[str] = None,
     max_scrolls: int = 300,
     stall_limit: int = 3,
     scroll_wait_ms: int = 700,
@@ -146,23 +147,29 @@ def count_unique_elements_by_scroll(
     is used as the dedupe key (e.g. to pull a stable product/article id out
     of a CDN image URL that also contains a cache-busting size suffix);
     otherwise the raw attribute value is used as-is.
+    `fallback_attribute` keys tiles whose primary attribute is missing or
+    doesn't match `key_pattern` (e.g. a product whose image failed to load
+    and shows a no-image placeholder); without it such tiles are dropped
+    from the count entirely.
     """
     key_re = re.compile(key_pattern) if key_pattern else None
     seen: set[str] = set()
 
+    fallback_js = f"e.getAttribute('{fallback_attribute}')" if fallback_attribute else "null"
+    collect_js = f"els => els.map(e => [e.getAttribute('{attribute}'), {fallback_js}])"
+
     def collect() -> None:
-        values = page.eval_on_selector_all(
-            selector, f"els => els.map(e => e.getAttribute('{attribute}'))"
-        )
-        for value in values:
-            if not value:
-                continue
-            if key_re:
+        for value, fallback in page.eval_on_selector_all(selector, collect_js):
+            if value and key_re:
                 match = key_re.search(value)
                 if match:
                     seen.add(match.group(0))
-            else:
+                    continue
+            elif value:
                 seen.add(value)
+                continue
+            if fallback:
+                seen.add(f"fallback:{fallback}")
 
     page.goto(start_url, wait_until="domcontentloaded")
     dismiss_cookie_banner(page)

@@ -172,4 +172,9 @@ def get_sku_count(page: Page, start_url: str = START_URL) -> int:
         selector=PRODUCT_IMAGE_SELECTOR,
         attribute="src",
         key_pattern=ARTICLE_ID_PATTERN,
+        # Tiles whose CDN image failed to load show /storage/no-image.png
+        # (no article id in the src); key those on the alt text so they
+        # still count. Slight undercount possible if two same-named
+        # variants both lack images, but far better than dropping them.
+        fallback_attribute="alt",
     )
