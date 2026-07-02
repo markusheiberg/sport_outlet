@@ -29,16 +29,38 @@ class SiteResult:
     note: str = ""
 
 
+class ScrapeError(RuntimeError):
+    """Raised when a scraper cannot produce a trustworthy count."""
+
+
 @contextmanager
 def browser_page() -> Iterator[Page]:
     """Launch a single headless browser page, closed automatically."""
     with sync_playwright() as pw:
         browser: Browser = pw.chromium.launch(headless=True)
         try:
-            page = browser.new_page(user_agent=USER_AGENT)
+            page = browser.new_page(user_agent=USER_AGENT, locale="nb-NO")
             yield page
         finally:
             browser.close()
+
+
+# Button texts used by the consent banners common on Norwegian sites
+# (Cookiebot, CookieInformation, custom). Matched case-insensitively.
+_CONSENT_BUTTON_TEXTS = ["godta alle", "aksepter alle", "godta", "aksepter", "accept all", "tillat alle"]
+
+
+def dismiss_cookie_banner(page: Page) -> None:
+    """Best-effort click on a cookie-consent accept button; never raises."""
+    for text in _CONSENT_BUTTON_TEXTS:
+        try:
+            button = page.get_by_role("button", name=re.compile(text, re.IGNORECASE)).first
+            if button.is_visible(timeout=1000):
+                button.click(timeout=2000)
+                page.wait_for_timeout(500)
+                return
+        except Exception:
+            continue
 
 
 def count_products_by_pagination(
@@ -142,6 +164,15 @@ def count_unique_elements_by_scroll(
                 seen.add(value)
 
     page.goto(start_url, wait_until="domcontentloaded")
+    dismiss_cookie_banner(page)
+    # Catalogs on these sites render client-side, so the selector may take
+    # a while to appear after domcontentloaded.
+    try:
+        page.wait_for_selector(selector, timeout=30_000)
+    except Exception:
+        raise ScrapeError(
+            f"no elements matching {selector!r} appeared within 30s at {page.url}"
+        )
     page.wait_for_timeout(scroll_wait_ms)
     collect()
 
@@ -155,6 +186,10 @@ def count_unique_elements_by_scroll(
         if stalled >= stall_limit:
             break
 
+    if not seen:
+        raise ScrapeError(
+            f"elements matched {selector!r} but none yielded a product key at {page.url}"
+        )
     return len(seen)
 
 
