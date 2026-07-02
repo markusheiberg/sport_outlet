@@ -80,6 +80,13 @@ def main() -> None:
             els = page.evaluate(_FIND_TEXT_ELEMENTS_JS, name)
             print(f"  {name!r}: {els}")
 
+        try:
+            response = page.request.get("https://sportoutlet.no/api/v1/categories")
+            print(f"categories api status: {response.status}")
+            print(f"categories api body (first 4000 chars):\n{response.text()[:4000]}")
+        except Exception as exc:
+            print(f"categories api fetch failed: {exc}")
+
         page.screenshot(path="debug_screenshot.png", full_page=False)
         with open("debug_page.html", "w", encoding="utf-8") as f:
             f.write(page.content())

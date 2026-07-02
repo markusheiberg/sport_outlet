@@ -33,6 +33,7 @@ from ._common import ScrapeError, count_unique_elements_by_scroll, dismiss_cooki
 
 START_URL = "https://sportoutlet.no/campaign"
 HOME_URL = "https://sportoutlet.no/"
+CATEGORIES_API_URL = "https://sportoutlet.no/api/v1/categories"
 PRODUCT_IMAGE_SELECTOR = 'img[alt^="Image of product:"]'
 ARTICLE_ID_PATTERN = r"/articles/[^/]+/"
 
@@ -84,17 +85,70 @@ def _open_panel(page: Page, label: str) -> bool:
     return False
 
 
-def get_categories(page: Page) -> dict[str, str]:
-    """Resolve category name -> URL from the live DOM (no guessed slugs).
+# Key names commonly used for a display name / link target in category
+# JSON payloads; matched entries are still filtered against CATEGORY_NAMES.
+_API_NAME_KEYS = ("name", "title", "label")
+_API_URL_KEYS = ("url", "href", "link", "path", "slug")
 
-    Strategy 1: find anchors whose visible text is a category name, also
-    after opening the Kategori filter and the Meny drawer.
-    Strategy 2 (fallback, since the Kategori items may be JS-navigating
-    buttons rather than <a> tags): click each category name and capture
-    the URL the site itself navigates to.
+
+def _walk_category_entries(node):
+    """Yield (name, absolute_url) for every dict in a JSON tree that has
+    both a name-ish and a url-ish string field, regardless of nesting."""
+    if isinstance(node, dict):
+        name = next(
+            (node[k].strip() for k in _API_NAME_KEYS
+             if isinstance(node.get(k), str) and node[k].strip()),
+            None,
+        )
+        url = next(
+            (node[k].strip() for k in _API_URL_KEYS
+             if isinstance(node.get(k), str) and node[k].strip()),
+            None,
+        )
+        if name and url:
+            yield name, urllib.parse.urljoin(HOME_URL, url)
+        for value in node.values():
+            yield from _walk_category_entries(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _walk_category_entries(value)
+
+
+def _categories_from_api(page: Page, wanted: dict[str, str]) -> dict[str, str]:
+    """name -> URL for wanted categories, from the site's own categories
+    API. Returns whatever subset it could resolve; empty dict on failure."""
+    resolved: dict[str, str] = {}
+    try:
+        response = page.request.get(CATEGORIES_API_URL)
+        if not response.ok:
+            return resolved
+        data = response.json()
+    except Exception:
+        return resolved
+    for name, url in _walk_category_entries(data):
+        key = _norm(name)
+        if key in wanted and wanted[key] not in resolved:
+            resolved[wanted[key]] = url
+    return resolved
+
+
+def get_categories(page: Page) -> dict[str, str]:
+    """Resolve category name -> URL, preferring the site's own categories
+    API (https://sportoutlet.no/api/v1/categories) - the authoritative
+    name-to-URL mapping, which matters because this site's slug text does
+    not reliably reflect a page's content.
+
+    DOM fallbacks if the API is unavailable or incomplete:
+    1. anchors whose visible text is a category name (also after opening
+       the Kategori filter and the Meny drawer);
+    2. clicking each category name and capturing the navigation URL;
+    3. probing candidate URLs and letting each page identify itself by
+       its title / breadcrumb (never by slug or <h1>).
     """
     wanted = {_norm(name): name for name in CATEGORY_NAMES}
-    resolved: dict[str, str] = {}
+    resolved: dict[str, str] = _categories_from_api(page, wanted)
+    if len(resolved) == len(wanted):
+        return resolved
 
     for url in (START_URL, HOME_URL):
         page.goto(url, wait_until="domcontentloaded")

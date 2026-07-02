@@ -45,6 +45,19 @@ def run_site(name: str, module) -> list[SiteResult]:
                             category="(categories)",
                         )
                     )
+                # Categories the module knows about but couldn't resolve a
+                # URL for must surface as error rows, not vanish silently.
+                for missing in getattr(module, "CATEGORY_NAMES", []):
+                    if missing not in categories:
+                        results.append(
+                            SiteResult(
+                                site=name,
+                                sku_count=None,
+                                status="error",
+                                note="no URL resolved for this category",
+                                category=missing,
+                            )
+                        )
                 for cat_name, cat_url in categories.items():
                     try:
                         count = module.get_sku_count(page, cat_url)
