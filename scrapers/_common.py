@@ -102,6 +102,62 @@ def count_products_by_pagination(
     return len(seen)
 
 
+def count_unique_elements_by_scroll(
+    page: Page,
+    start_url: str,
+    selector: str,
+    attribute: str = "src",
+    key_pattern: Optional[str] = None,
+    max_scrolls: int = 300,
+    stall_limit: int = 3,
+    scroll_wait_ms: int = 700,
+) -> int:
+    """SKU counter for infinite-scroll catalogs (no URL pagination, no
+    "load more" button): repeatedly scroll to the bottom of the page,
+    collecting unique product-tile keys until scrolling further adds no
+    new ones.
+
+    `selector` targets one element per product tile (e.g. a product image).
+    `attribute` is read off each matched element (e.g. "src" or "alt").
+    `key_pattern`, if given, is applied via re.search and the whole match
+    is used as the dedupe key (e.g. to pull a stable product/article id out
+    of a CDN image URL that also contains a cache-busting size suffix);
+    otherwise the raw attribute value is used as-is.
+    """
+    key_re = re.compile(key_pattern) if key_pattern else None
+    seen: set[str] = set()
+
+    def collect() -> None:
+        values = page.eval_on_selector_all(
+            selector, f"els => els.map(e => e.getAttribute('{attribute}'))"
+        )
+        for value in values:
+            if not value:
+                continue
+            if key_re:
+                match = key_re.search(value)
+                if match:
+                    seen.add(match.group(0))
+            else:
+                seen.add(value)
+
+    page.goto(start_url, wait_until="domcontentloaded")
+    page.wait_for_timeout(scroll_wait_ms)
+    collect()
+
+    stalled = 0
+    for _ in range(max_scrolls):
+        before = len(seen)
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        page.wait_for_timeout(scroll_wait_ms)
+        collect()
+        stalled = stalled + 1 if len(seen) == before else 0
+        if stalled >= stall_limit:
+            break
+
+    return len(seen)
+
+
 def write_result(result: SiteResult) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     is_new = not RESULTS_CSV.exists()
