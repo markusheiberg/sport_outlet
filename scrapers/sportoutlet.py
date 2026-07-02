@@ -12,14 +12,18 @@ The <article-id> segment is stable per product and used as the dedupe key
 (product *name*/alt text is not unique - color/size variants share it).
 
 Category pages (e.g. https://sportoutlet.no/kl%C3%A6r) use the same tile
-markup and infinite scroll. Their URLs are resolved from the live DOM by
-matching visible link text against CATEGORY_NAMES rather than hardcoding
-slugs, so multi-word categories can't be mis-guessed. A product can appear
-in more than one category, so the per-category counts may sum to more than
-the "all" count.
+markup and infinite scroll, but their URL slugs are SCRAMBLED relative to
+their content: /kj%C3%A6ledyr actually serves the Klær category (its
+<title> is "Alle produkter i Klær - Klær | Sport Outlet") while its <h1>
+misleadingly echoes the slug. Category URLs are therefore resolved by
+probing candidates and letting each page identify itself via the title
+pattern / breadcrumb self-link - never by slug text or <h1>. A product
+can appear in more than one category, so per-category counts may sum to
+more than the "all" count.
 """
 from __future__ import annotations
 
+import re
 import unicodedata
 import urllib.parse
 
@@ -126,12 +130,31 @@ def get_categories(page: Page) -> dict[str, str]:
         except Exception:
             continue
 
-    for key, name in wanted.items():
-        if name in resolved:
+    # Probe candidate URLs and let each page IDENTIFY itself. Slugs on
+    # this site are scrambled relative to their content (verified live:
+    # /kj%C3%A6ledyr titles itself "Alle produkter i Klær" and serves the
+    # Klær category while its <h1> echoes the slug), so a slug or an <h1>
+    # must never be trusted as the category identity - only the title
+    # pattern / breadcrumb self-link says what a page really serves.
+    candidates = [
+        HOME_URL + urllib.parse.quote(_norm(name).replace(" ", "-"))
+        for name in CATEGORY_NAMES
+    ]
+    if len(resolved) < len(wanted):
+        candidates += _sitemap_candidates(page)
+    probed: set[str] = set()
+    for url in candidates:
+        if len(resolved) == len(wanted):
+            break
+        if url in probed:
             continue
-        url = _verified_slug_url(page, name)
-        if url:
-            resolved[name] = url
+        probed.add(url)
+        identified = _identify_category_page(page, url)
+        if identified is None:
+            continue
+        key = _norm(identified)
+        if key in wanted and wanted[key] not in resolved:
+            resolved[wanted[key]] = url
 
     if not resolved:
         raise ScrapeError(
@@ -140,29 +163,64 @@ def get_categories(page: Page) -> dict[str, str]:
     return resolved
 
 
-def _verified_slug_url(page: Page, name: str) -> str | None:
-    """Derive https://sportoutlet.no/<slug> from the category name (the
-    user-confirmed pattern: 'Klær' -> /kl%C3%A6r) and accept it ONLY if the
-    live page proves it's that category: it must load without an HTTP
-    error, render product tiles, and carry the category name in its
-    <title> or <h1>. Anything else returns None and the category is
-    reported as an error row instead of a guessed count.
+# "Alle produkter i Klær - Klær | Sport Outlet" -> "Klær"
+_CATEGORY_TITLE_RE = re.compile(r"Alle produkter i (.+?)\s+[-–]")
+
+
+def _identify_category_page(page: Page, url: str) -> str | None:
+    """Load `url` and return the category name the page says it serves,
+    or None if it isn't a working category page. Identity comes from the
+    <title> ("Alle produkter i <name> - ...") or, failing that, the
+    breadcrumb's self-link; the <h1> is deliberately ignored because it
+    echoes the URL slug even when the slug is wrong.
     """
-    slug = _norm(name).replace(" ", "-")
-    url = HOME_URL + urllib.parse.quote(slug)
     try:
         response = page.goto(url, wait_until="domcontentloaded")
         if response is not None and response.status >= 400:
             return None
         page.wait_for_selector(PRODUCT_IMAGE_SELECTOR, timeout=10_000)
-        labels = [page.title()]
-        for h1 in page.eval_on_selector_all("h1", "els => els.map(e => e.innerText)"):
-            labels.append(h1)
-        if any(_norm(name) in _norm(label) for label in labels if label):
-            return page.url
+    except Exception:
+        return None
+    match = _CATEGORY_TITLE_RE.search(page.title() or "")
+    if match:
+        return match.group(1).strip()
+    try:
+        self_links = page.eval_on_selector_all(
+            "a",
+            "els => els.filter(e => e.href === location.href)"
+            ".map(e => e.innerText.trim()).filter(t => t)",
+        )
+        for text in self_links:
+            if _norm(text) != "hjem":
+                return text
     except Exception:
         pass
     return None
+
+
+def _sitemap_candidates(page: Page) -> list[str]:
+    """Single-path-segment URLs from sitemap.xml (following one level of
+    sitemap-index nesting) - candidate category pages to probe."""
+    seen_xml: list[str] = [HOME_URL + "sitemap.xml"]
+    pages: list[str] = []
+    index = 0
+    while index < len(seen_xml) and index < 10:
+        xml_url = seen_xml[index]
+        index += 1
+        try:
+            page.goto(xml_url, wait_until="domcontentloaded")
+            locs = re.findall(r"<loc>\s*(.*?)\s*</loc>", page.content())
+        except Exception:
+            continue
+        for loc in locs:
+            if loc.endswith(".xml"):
+                if loc not in seen_xml:
+                    seen_xml.append(loc)
+                continue
+            path = urllib.parse.urlparse(loc).path.strip("/")
+            if path and "/" not in path:
+                pages.append(loc)
+    return pages[:150]
 
 
 def get_sku_count(page: Page, start_url: str = START_URL) -> int:
