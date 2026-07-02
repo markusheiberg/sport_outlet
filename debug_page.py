@@ -33,9 +33,30 @@ _FIND_TEXT_ELEMENTS_JS = """(name) => {
 }"""
 
 
+def _labeled_counts(node, out: list) -> None:
+    if isinstance(node, dict):
+        if isinstance(node.get("label"), str) and isinstance(node.get("count"), int):
+            out.append((node["label"], node["count"], bool(node.get("selected"))))
+        for value in node.values():
+            _labeled_counts(value, out)
+    elif isinstance(node, list):
+        for value in node:
+            _labeled_counts(value, out)
+
+
 def main() -> None:
     url = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_URL
+    api_payloads: list = []
     with browser_page() as page:
+        def on_response(response) -> None:
+            if "apptus.cloud" not in response.url:
+                return
+            try:
+                api_payloads.append((response.url, response.json()))
+            except Exception:
+                pass
+
+        page.on("response", on_response)
         page.goto(url, wait_until="domcontentloaded")
         page.wait_for_timeout(5000)
 
@@ -79,6 +100,19 @@ def main() -> None:
         for name in CATEGORY_NAMES:
             els = page.evaluate(_FIND_TEXT_ELEMENTS_JS, name)
             print(f"  {name!r}: {els}")
+
+        body_text = page.inner_text("body")
+        idx = body_text.find("Artikler")
+        context = body_text[max(0, idx - 60) : idx + 60].replace("\n", " | ") if idx != -1 else ""
+        print(f"'Artikler' in body text: {idx != -1}  context: {context!r}")
+
+        print(f"apptus API responses seen: {len(api_payloads)}")
+        for api_url, payload in api_payloads[:5]:
+            pairs: list = []
+            _labeled_counts(payload, pairs)
+            print(f"  {api_url.split('?')[0]}")
+            print(f"    label/count pairs (selected*): "
+                  f"{[(l + ('*' if s else ''), c) for l, c, s in pairs[:25]]}")
 
         try:
             response = page.request.get("https://sportoutlet.no/api/v1/categories")
