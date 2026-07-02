@@ -56,6 +56,7 @@ Scrapers → local CSV.
 
 ## Sites (site keys, immutable)
 - `sportoutlet` — sportoutlet.no
+- `xxl` — xxl.no
 - `antonsport` — antonsport.no
 - `intersport` — intersport.no
 - `sport1` — sport1.no
