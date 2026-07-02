@@ -14,7 +14,8 @@ playwright install chromium
 ## Run
 
 ```bash
-python main.py
+python main.py              # default: 4 parallel browser workers
+python main.py --workers 8  # more parallelism (watch RAM/CPU)
 ```
 
 Prints a summary table and appends rows to `data/sku_counts.csv`

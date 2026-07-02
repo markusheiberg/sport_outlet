@@ -85,6 +85,13 @@ def _open_panel(page: Page, label: str) -> bool:
     return False
 
 
+# User-verified category URLs that take precedence over every discovery
+# stage. Kjæledyr: the site routes this category at the transliterated
+# slug /kjaeledyr, while /kj%C3%A6ledyr (the literal name) serves Klær.
+CATEGORY_URL_OVERRIDES = {
+    "Kjæledyr": "https://sportoutlet.no/kjaeledyr",
+}
+
 # Key names commonly used for a display name / link target in category
 # JSON payloads; matched entries are still filtered against CATEGORY_NAMES.
 _API_NAME_KEYS = ("name", "title", "label")
@@ -147,6 +154,7 @@ def get_categories(page: Page) -> dict[str, str]:
     """
     wanted = {_norm(name): name for name in CATEGORY_NAMES}
     resolved: dict[str, str] = _categories_from_api(page, wanted)
+    resolved.update(CATEGORY_URL_OVERRIDES)
     if len(resolved) == len(wanted):
         return resolved
 

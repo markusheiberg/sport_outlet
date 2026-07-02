@@ -1,17 +1,28 @@
 """Entry point: run every site scraper once, write results, print summary.
 
-Usage: python main.py
+Usage: python main.py [--workers N]
 No scheduler involved - run this whenever you want a fresh snapshot.
 
 For each site, records one "all" row (whole catalog). Sites whose scraper
 module exports get_categories() additionally get one row per category.
 Note that per-category counts can sum to more than the "all" count when a
 product is listed in several categories.
+
+Counts run in a thread pool (default 4 workers); each worker drives its
+own headless browser, since Playwright's sync API must not be shared
+across threads. Phase 1 handles whole-catalog counts + category
+discovery per site, phase 2 fans the discovered category pages out
+across workers.
 """
 from __future__ import annotations
 
+import argparse
+from concurrent.futures import ThreadPoolExecutor
+
 from scrapers import SITES
 from scrapers._common import SiteResult, browser_page, write_result
+
+DEFAULT_WORKERS = 4
 
 
 def _err_note(exc: Exception) -> str:
@@ -19,8 +30,13 @@ def _err_note(exc: Exception) -> str:
     return " ".join(str(exc).split())[:200]
 
 
-def run_site(name: str, module) -> list[SiteResult]:
+CategoryTask = tuple[str, object, str, str]  # site, module, category, url
+
+
+def run_site(name: str, module) -> tuple[list[SiteResult], list[CategoryTask]]:
+    """Whole-catalog count + category discovery for one site."""
     results: list[SiteResult] = []
+    tasks: list[CategoryTask] = []
     try:
         with browser_page() as page:
             try:
@@ -59,38 +75,53 @@ def run_site(name: str, module) -> list[SiteResult]:
                             )
                         )
                 for cat_name, cat_url in categories.items():
-                    try:
-                        count = module.get_sku_count(page, cat_url)
-                        results.append(
-                            SiteResult(site=name, sku_count=count, status="ok", category=cat_name)
-                        )
-                    except Exception as exc:
-                        results.append(
-                            SiteResult(
-                                site=name,
-                                sku_count=None,
-                                status="error",
-                                note=_err_note(exc),
-                                category=cat_name,
-                            )
-                        )
+                    tasks.append((name, module, cat_name, cat_url))
     except Exception as exc:  # isolate failures - one site must never stop the others
         results.append(
             SiteResult(site=name, sku_count=None, status="error", note=_err_note(exc))
         )
-    return results
+    return results, tasks
+
+
+def run_category(task: CategoryTask) -> SiteResult:
+    """Count one category page in its own browser."""
+    site, module, cat_name, cat_url = task
+    try:
+        with browser_page() as page:
+            count = module.get_sku_count(page, cat_url)
+        return SiteResult(site=site, sku_count=count, status="ok", category=cat_name)
+    except Exception as exc:
+        return SiteResult(
+            site=site, sku_count=None, status="error", note=_err_note(exc), category=cat_name
+        )
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=DEFAULT_WORKERS,
+        help=f"parallel browser workers (default {DEFAULT_WORKERS})",
+    )
+    args = parser.parse_args()
+
     results: list[SiteResult] = []
-    for name, module in SITES:
-        results.extend(run_site(name, module))
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        site_outcomes = list(pool.map(lambda s: run_site(*s), SITES))
+    category_tasks: list[CategoryTask] = []
+    for site_results, tasks in site_outcomes:
+        results.extend(site_results)
+        category_tasks.extend(tasks)
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        results.extend(pool.map(run_category, category_tasks))
+
     for result in results:
         write_result(result)
 
     print(f"{'Site':<15}{'Category':<22}{'SKUs':>8}  Status")
     print("-" * 65)
-    for r in results:
+    for r in sorted(results, key=lambda r: (r.site, r.category != "all", r.category)):
         count_display = r.sku_count if r.sku_count is not None else "NULL"
         note = f" - {r.note}" if r.note else ""
         print(f"{r.site:<15}{r.category:<22}{count_display!s:>8}  {r.status}{note}")

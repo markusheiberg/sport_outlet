@@ -13,7 +13,9 @@ Scrapers → local CSV.
   writer).
 - `main.py` — entry point; runs every scraper once, appends one row per
   site to `data/sku_counts.csv`, and prints a summary table to the
-  terminal.
+  terminal. Counts run in a thread pool (`--workers`, default 4); each
+  worker drives its own headless browser because Playwright's sync API
+  must not be shared across threads.
 - No scheduler, no cloud deployment, no database. Run `python main.py`
   by hand whenever you want a new snapshot; re-running over time builds
   up a simple trend in the CSV.
