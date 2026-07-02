@@ -21,10 +21,17 @@ Scrapers → local CSV.
   up a simple trend in the CSV.
 
 ## How it runs
-- A headless browser (Playwright) loads each site's product catalog and
-  counts *unique product-detail-page links*, paginating through the
-  catalog until no new products are found. This avoids relying on an
-  "X products found" label, since not all sites show one.
+- Preferred: read counts from a site's own catalog API when one exists.
+  `sportoutlet` uses https://sportoutlet.no/api/v1/categories, whose
+  per-main-group `articlesCount` is authoritative — the rendered catalog
+  stops loading around ~1700 tiles regardless of scrolling, so DOM
+  counting silently undercounts large categories there. Its `all` row is
+  the sum over main groups (a product in two groups counts twice).
+- Otherwise: a headless browser (Playwright) loads the site's product
+  catalog and counts *unique product tiles/links*, paginating or
+  scrolling until no new products appear. Beware rendering caps like the
+  one above — validate a big category against the site's own numbers
+  before trusting scroll-based counts.
 - Each site has its own scraper module exporting `get_sku_count(page)`.
   A module may also export `get_categories(page) -> {name: url}`; when it
   does, `main.py` records one extra row per category alongside the

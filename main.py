@@ -47,7 +47,38 @@ def run_site(name: str, module) -> tuple[list[SiteResult], list[CategoryTask]]:
                     SiteResult(site=name, sku_count=None, status="error", note=_err_note(exc))
                 )
 
-            if hasattr(module, "get_categories"):
+            if hasattr(module, "get_category_counts"):
+                # Site exposes per-category counts directly (e.g. from its
+                # own API) - no per-category page visits needed.
+                try:
+                    category_counts = module.get_category_counts(page)
+                except Exception as exc:
+                    category_counts = {}
+                    results.append(
+                        SiteResult(
+                            site=name,
+                            sku_count=None,
+                            status="error",
+                            note=f"category counts failed: {_err_note(exc)}"[:200],
+                            category="(categories)",
+                        )
+                    )
+                for cat_name, count in category_counts.items():
+                    results.append(
+                        SiteResult(site=name, sku_count=count, status="ok", category=cat_name)
+                    )
+                for missing in getattr(module, "CATEGORY_NAMES", []):
+                    if missing not in category_counts:
+                        results.append(
+                            SiteResult(
+                                site=name,
+                                sku_count=None,
+                                status="error",
+                                note="category missing from source",
+                                category=missing,
+                            )
+                        )
+            elif hasattr(module, "get_categories"):
                 try:
                     categories = module.get_categories(page)
                 except Exception as exc:

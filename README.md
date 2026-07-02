@@ -26,8 +26,12 @@ category. A failed read is recorded with an empty `sku_count` and
 `status=error` rather than a guessed number. Existing CSVs from before
 the `category` column are migrated in place on the next run.
 
-Note: per-category counts can sum to more than the `all` count, since a
-product may be listed in several categories.
+Sport Outlet's counts come from the site's own categories API
+(`/api/v1/categories`, field `articlesCount`) rather than scraping
+rendered tiles — the rendered catalog caps out around ~1700 tiles no
+matter how far you scroll, so DOM counts undercut large categories. Its
+`all` row is the sum over the API's main groups; a product listed under
+two main groups is counted twice there.
 
 ## Adding / fixing a site scraper
 
