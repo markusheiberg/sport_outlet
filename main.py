@@ -17,6 +17,7 @@ across workers.
 from __future__ import annotations
 
 import argparse
+import sys
 from concurrent.futures import ThreadPoolExecutor
 
 from scrapers import SITES
@@ -156,6 +157,11 @@ def main() -> None:
         count_display = r.sku_count if r.sku_count is not None else "NULL"
         note = f" - {r.note}" if r.note else ""
         print(f"{r.site:<15}{r.category:<22}{count_display!s:>8}  {r.status}{note}")
+
+    # Every single row failing means the run produced no data at all -
+    # exit nonzero so CI marks the run red.
+    if results and all(r.status == "error" for r in results):
+        sys.exit(1)
 
 
 if __name__ == "__main__":

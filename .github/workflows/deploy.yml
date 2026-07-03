@@ -1,0 +1,69 @@
+# Optional GCP fallback: build the scraper image, deploy it as a Cloud Run
+# Job, optionally execute it and print the logs - useful for trial-and-error
+# loops when you want a different egress network than GitHub's runners.
+#
+# Prerequisites (see SETUP.md, Tier 2): run setup-gcp-wif.sh once in Cloud
+# Shell, then replace the four <angle-bracket> placeholders below with the
+# values it prints. Deliberately workflow_dispatch-only so it never runs
+# before GCP is configured; add a push trigger if you want push-to-deploy.
+name: Deploy to Cloud Run (GCP fallback)
+
+on:
+  workflow_dispatch:
+    inputs:
+      execute:
+        description: "Execute the job after deploying and print its logs"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: <your-project-id>
+  REGION: <your-region>            # e.g. europe-north1
+  AR_REPO: scrapers
+  JOB_NAME: sku-tracker
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          # Printed by setup-gcp-wif.sh (contains your project NUMBER):
+          workload_identity_provider: <projects/NUMBER/locations/global/workloadIdentityPools/github-pool/providers/github-provider>
+          service_account: github-deployer@<your-project-id>.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build and push image
+        run: |
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/${JOB_NAME}"
+          docker build -t "${IMAGE}:latest" .
+          docker push "${IMAGE}:latest"
+
+      - name: Deploy Cloud Run job (creates or updates)
+        run: |
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}/${JOB_NAME}"
+          gcloud run jobs deploy "${JOB_NAME}" \
+            --image "${IMAGE}:latest" \
+            --region "${REGION}" \
+            --service-account "scraper-runner@${PROJECT_ID}.iam.gserviceaccount.com" \
+            --memory 2Gi \
+            --task-timeout 30m
+
+      - name: Execute job
+        if: ${{ inputs.execute }}
+        run: gcloud run jobs execute "${JOB_NAME}" --region "${REGION}" --wait
+
+      - name: Print job logs
+        if: ${{ always() && inputs.execute }}
+        run: |
+          gcloud logging read \
+            'resource.type="cloud_run_job" resource.labels.job_name="'"${JOB_NAME}"'"' \
+            --freshness 1h --limit 300 --format 'value(textPayload)' | tac

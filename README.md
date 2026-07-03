@@ -1,8 +1,13 @@
 # Nordic Sport Retail SKU Tracker
 
 Counts the number of products (SKUs) listed on Norwegian sport retail
-websites: Sport Outlet, Anton Sport, Intersport, Sport1. On-demand only —
-no scheduler.
+websites (Sport Outlet, XXL, Anton Sport, Intersport, Sport1), whole
+catalog and per category. On-demand — run locally, or via the
+**Scrape SKU counts** GitHub Actions workflow, which runs the scrapers
+on a GitHub runner and commits `data/sku_counts.csv` back to this repo.
+An optional Cloud Run fallback exists for heavy debugging loops. See
+`SETUP.md` to replicate this in your own account, and `CLAUDE.md` for
+how each scraper works and the site-specific gotchas.
 
 ## Setup
 
